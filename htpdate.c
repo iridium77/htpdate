@@ -51,6 +51,8 @@
 #include <limits.h>
 #include <pwd.h>
 #include <grp.h>
+#include <errno.h>
+#include <fcntl.h>
 
 #define VERSION 				"1.0.5"
 #define	MAX_HTTP_HOSTS			15				/* 16 web servers */
@@ -141,7 +143,7 @@ static void printlog( int is_error, char *format, ... ) {
 }
 
 
-static long getHTTPdate( char *host, char *port, char *proxy, char *proxyport, char *httpversion, int ipversion, int when ) {
+static long getHTTPdate( char *host, char *port, char *proxy, char *proxyport, char *httpversion, int ipversion, int when, int *error ) {
 	int					server_s;
 	int					rc;
 	struct addrinfo		hints, *res, *res0;
@@ -154,6 +156,7 @@ static long getHTTPdate( char *host, char *port, char *proxy, char *proxyport, c
 	char				remote_time[25] = { '\0' };
 	char				url[URLSIZE] = { '\0' };
 	char				*pdate = NULL;
+	struct timeval timeout = {5, 0};
 
 
 	/* Connect to web server via proxy server or directly */
@@ -181,6 +184,7 @@ static long getHTTPdate( char *host, char *port, char *proxy, char *proxyport, c
 	/* Was the hostname and service resolvable? */
 	if ( rc ) {
 		printlog( 1, "%s host or service unavailable", host );
+		*error = 1;
 		return(0);				/* Assume correct time */
 	}
 
@@ -199,21 +203,40 @@ static long getHTTPdate( char *host, char *port, char *proxy, char *proxyport, c
 		if ( server_s < 0 ) {
 			continue;
 		}
-
+		int val = fcntl(server_s, F_GETFL, 0);
+		fcntl(server_s, F_SETFL, val | O_NONBLOCK);
 		rc = connect( server_s, res->ai_addr, res->ai_addrlen );
-		if ( rc ) {
-			close( server_s);
-			server_s = -1;
-			continue;
+		if ( rc == -1 ) {
+			if ( errno != EINPROGRESS ) {
+				close( server_s );
+				server_s = -1;
+				continue;
+			} else {
+				fd_set fdset;
+				FD_ZERO(&fdset);
+				FD_SET(server_s, &fdset);
+				int so_error;
+				socklen_t len;
+				if (select(server_s + 1, NULL, &fdset, NULL, &timeout) != 1
+						|| !FD_ISSET(server_s, &fdset)
+						|| getsockopt(server_s, SOL_SOCKET, SO_ERROR, &so_error, &len) < 0) {
+					close(server_s);
+					server_s = -1;
+					continue;
+				}
+			}
 		}
-
+		fcntl(server_s, F_SETFL, val);
+		setsockopt(server_s, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
+		setsockopt(server_s, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
 		break;
 	} while ( ( res = res->ai_next ) );
 
 	freeaddrinfo(res0);
 
-	if ( rc ) {
+	if (server_s < 0) {
 		printlog( 1, "%s connection failed", host );
+		*error = 1;
 		return(0);				/* Assume correct time */
 	}
 
@@ -289,6 +312,7 @@ static long getHTTPdate( char *host, char *port, char *proxy, char *proxyport, c
 	/* Return the time delta between web server time (timevalue)
 	   and system time (timeofday)
 	*/
+	*error = 0;
 	return( timevalue.tv_sec - timeofday.tv_sec + gmtoffset );
 			
 }
@@ -501,6 +525,7 @@ int main( int argc, char *argv[] ) {
 	int					sleeptime = minsleep;
 	int					sw_uid = 0, sw_gid = 0;
 	time_t				starttime = 0;
+	int error, all_server_error;
 
 	struct passwd		*pw;
 	struct group		*gr;
@@ -665,6 +690,7 @@ int main( int argc, char *argv[] ) {
 	   and the average of the good timestamps
 	*/
 	validtimes = goodtimes = sumtimes = offsetdetect = 0;
+	all_server_error = 1;
 	if ( precision )
 		when = precision;
 	else
@@ -694,9 +720,13 @@ int main( int argc, char *argv[] ) {
 				if ( debug ) printlog( 0, "burst: %d try: %d when: %d", \
 					burst + 1, MAX_ATTEMPT - try + 1, when );
 				timestamp = getHTTPdate( host, port, proxy, proxyport,\
-						httpversion, ipversion, when );
+						httpversion, ipversion, when, &error );
 				try--;
 			} while ( timestamp && try );
+
+			if ( !error ) {
+				all_server_error = 0;
+			}
 
 			/* Only include valid responses in timedelta[] */
 			if ( timestamp < timelimit && timestamp > -timelimit ) {
@@ -724,9 +754,15 @@ int main( int argc, char *argv[] ) {
 		} while ( burst < (argc - optind) * burstmode );
 
 		/* Sleep for a while, unless we detected a time offset */
-		if ( daemonize && !offsetdetect )
+		if ( daemonize && !offsetdetect && !error )
 			sleep( sleeptime / numservers );
+	}
 
+	// Retry after 10 seconds when no server returned "Date: " header,
+	// probably no access to Internet.
+	if ( all_server_error ) {
+		sleep(10);
+		continue;
 	}
 
 	/* Sort the timedelta results */
