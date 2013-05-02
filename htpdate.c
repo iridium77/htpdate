@@ -729,7 +729,7 @@ int main( int argc, char *argv[] ) {
 			}
 
 			/* Only include valid responses in timedelta[] */
-			if ( timestamp < timelimit && timestamp > -timelimit ) {
+			if ( !error && timestamp < timelimit && timestamp > -timelimit ) {
 				timedelta[validtimes] = timestamp;
 				validtimes++;
 			}
