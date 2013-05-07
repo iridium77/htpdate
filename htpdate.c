@@ -208,6 +208,7 @@ static long getHTTPdate( char *host, char *port, char *proxy, char *proxyport, c
 		rc = connect( server_s, res->ai_addr, res->ai_addrlen );
 		if ( rc == -1 ) {
 			if ( errno != EINPROGRESS ) {
+				printlog( 1, "connect() got error: %d", errno );
 				close( server_s );
 				server_s = -1;
 				continue;
@@ -215,11 +216,9 @@ static long getHTTPdate( char *host, char *port, char *proxy, char *proxyport, c
 				fd_set fdset;
 				FD_ZERO(&fdset);
 				FD_SET(server_s, &fdset);
-				int so_error;
-				socklen_t len;
-				if (select(server_s + 1, NULL, &fdset, NULL, &timeout) != 1
-						|| !FD_ISSET(server_s, &fdset)
-						|| getsockopt(server_s, SOL_SOCKET, SO_ERROR, &so_error, &len) < 0) {
+				if (select(server_s + 1, NULL, &fdset, NULL, &timeout) < 1) {
+					printlog( 1, "select() failed: %d", errno );
+					printlog( 1, "FD_ISSET: %d", FD_ISSET(server_s, &fdset) );
 					close(server_s);
 					server_s = -1;
 					continue;
@@ -470,6 +469,7 @@ static void runasdaemon( char *pidfile ) {
 	close( STDERR_FILENO );
 
 	signal(SIGHUP, SIG_IGN);
+	signal(SIGPIPE, SIG_IGN);
 
 	/* Change the file mode mask */
 	umask(0);
