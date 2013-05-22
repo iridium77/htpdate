@@ -144,7 +144,7 @@ static void printlog( int is_error, char *format, ... ) {
 
 
 static long getHTTPdate( char *host, char *port, char *proxy, char *proxyport, char *httpversion, int ipversion, int when, int *error ) {
-	int					server_s;
+	int					server_s = -1;
 	int					rc;
 	struct addrinfo		hints, *res, *res0;
 	struct tm			tm;
@@ -184,8 +184,7 @@ static long getHTTPdate( char *host, char *port, char *proxy, char *proxyport, c
 	/* Was the hostname and service resolvable? */
 	if ( rc ) {
 		printlog( 1, "%s host or service unavailable", host );
-		*error = 1;
-		return(0);				/* Assume correct time */
+		goto error;
 	}
 
 	/* Build a combined HTTP/1.0 and 1.1 HEAD request
@@ -235,8 +234,7 @@ static long getHTTPdate( char *host, char *port, char *proxy, char *proxyport, c
 
 	if (server_s < 0) {
 		printlog( 1, "%s connection failed", host );
-		*error = 1;
-		return(0);				/* Assume correct time */
+		goto error;
 	}
 
 	/* Initialize timer */
@@ -256,64 +254,73 @@ static long getHTTPdate( char *host, char *port, char *proxy, char *proxyport, c
 	nanosleep( &sleepspec, &remainder );
 
 	/* Send HEAD request */
-	if ( send(server_s, buffer, strlen(buffer), 0) < 0 )
+	if ( send(server_s, buffer, strlen(buffer), 0) < 0 ) {
 		printlog( 1, "Error sending" );
+		goto error;
+	}
 
 	/* Receive data from the web server
 	   The return code from recv() is the number of bytes received
 	*/
-	if ( recv(server_s, buffer, BUFFERSIZE, 0) != -1 ) {
+	if ( recv(server_s, buffer, BUFFERSIZE, 0) < 0 ) {
+		printlog(1, "Error receiving");
+		goto error;
+	}
 
-		/* Assuming that network delay (server->htpdate) is neglectable,
-		   the received web server time "should" match the local time.
+	/* Assuming that network delay (server->htpdate) is neglectable,
+		 the received web server time "should" match the local time.
 
-		   From RFC 2616 paragraph 14.18
-		   ...
-		   It SHOULD represent the best available approximation
-		   of the date and time of message generation, unless the
-		   implementation has no means of generating a reasonably
-		   accurate date and time.
-		   ...
-		*/
+		 From RFC 2616 paragraph 14.18
+		 ...
+		 It SHOULD represent the best available approximation
+		 of the date and time of message generation, unless the
+		 implementation has no means of generating a reasonably
+		 accurate date and time.
+		 ...
+	*/
 
-		gettimeofday(&timeofday, NULL);
+	gettimeofday(&timeofday, NULL);
 
-		/* rtt contains round trip time in micro seconds, now! */
-		rtt = ( timeofday.tv_sec - rtt ) * 1000000 + \
-			timeofday.tv_usec - when;
+	/* rtt contains round trip time in micro seconds, now! */
+	rtt = ( timeofday.tv_sec - rtt ) * 1000000 + \
+		timeofday.tv_usec - when;
 
-		/* Look for the line that contains Date: */
-		if ( (pdate = strstr(buffer, "Date: ")) != NULL ) {
-			strncpy(remote_time, pdate + 11, 24);
+	/* Look for the line that contains Date: */
+	if ( (pdate = strstr(buffer, "Date: ")) == NULL ) {
+		printlog( 1, "%s no timestamp", host );
+		goto error;
+	}
 
-			if ( strptime( remote_time, "%d %b %Y %T", &tm) != NULL) {
-				/* Web server timestamps are without daylight saving */
-				tm.tm_isdst = 0;
-				timevalue.tv_sec = mktime(&tm);
-			} else {
-				printlog( 1, "%s unknown time format", host );
-			}
+	strncpy(remote_time, pdate + 11, 24);
 
-			/* Print host, raw timestamp, round trip time */
-			if ( debug )
-				printlog( 0, "%-25s %s (%.3f) => %li", host, remote_time, \
-				  rtt * 1e-6, timevalue.tv_sec - timeofday.tv_sec \
-				  + gmtoffset );
+	if ( strptime( remote_time, "%d %b %Y %T", &tm) == NULL) {
+		printlog( 1, "%s unknown time format", host );
+		goto error;
+	}
 
-		} else {
-			printlog( 1, "%s no timestamp", host );
-		}
+	/* Web server timestamps are without daylight saving */
+	tm.tm_isdst = 0;
+	timevalue.tv_sec = mktime(&tm);
 
-	}						/* bytes received */
-
-	close( server_s );
+	/* Print host, raw timestamp, round trip time */
+	if ( debug )
+		printlog( 0, "%-25s %s (%.3f) => %li", host, remote_time, \
+			rtt * 1e-6, timevalue.tv_sec - timeofday.tv_sec \
+			+ gmtoffset );
 
 	/* Return the time delta between web server time (timevalue)
-	   and system time (timeofday)
+		 and system time (timeofday)
 	*/
+	close( server_s );
 	*error = 0;
 	return( timevalue.tv_sec - timeofday.tv_sec + gmtoffset );
-			
+
+error:
+	if (server_s >= 0) {
+		close(server_s);
+	}
+	*error = 1;
+	return(0);
 }
 
 
