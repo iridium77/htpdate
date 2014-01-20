@@ -143,7 +143,7 @@ static void printlog( int is_error, char *format, ... ) {
 }
 
 
-static long getHTTPdate( char *host, char *port, char *proxy, char *proxyport, char *httpversion, int ipversion, int when, int *error ) {
+static long getHTTPdate( char *host, char *port, char *proxy, char *proxyport, char *httpversion, int ipversion, int when, int mintimestamp, int *error ) {
 	int					server_s = -1;
 	int					rc;
 	struct addrinfo		hints, *res, *res0;
@@ -302,6 +302,12 @@ static long getHTTPdate( char *host, char *port, char *proxy, char *proxyport, c
 	tm.tm_isdst = 0;
 	timevalue.tv_sec = mktime(&tm);
 
+	if ( timevalue.tv_sec + gmtoffset < mintimestamp) {
+		printlog( 1, "%s time %d is below lower limit %d", host, \
+			timevalue.tv_sec + gmtoffset, mintimestamp);
+		goto error;
+	}
+
 	/* Print host, raw timestamp, round trip time */
 	if ( debug )
 		printlog( 0, "%-25s %s (%.3f) => %li", host, remote_time, \
@@ -416,7 +422,7 @@ static int htpdate_adjtimex( double drift ) {
 static void showhelp() {
 	puts("htpdate version "VERSION"\n\
 Usage: htpdate [-046abdhlqstxD] [-i pid file] [-m minpoll] [-M maxpoll]\n\
-         [-p precision] [-P <proxyserver>[:port]] [-u user[:group]]\n\
+         [-p precision] [-P <proxyserver>[:port]] [-T mintimestamp] [-u user[:group]]\n\
          <host[:port]> ...\n\n\
   -0    HTTP/1.0 request\n\
   -4    Force IPv4 name resolution only\n\
@@ -435,6 +441,7 @@ Usage: htpdate [-046abdhlqstxD] [-i pid file] [-m minpoll] [-M maxpoll]\n\
   -q    query only, don't make time changes (default)\n\
   -s    set time\n\
   -t    turn off sanity time check\n\
+  -T    minimum timestamp allowed in server response\n\
   -u    run daemon as user\n\
   -x    adjust kernel clock\n\
   host  web server hostname or ip address (maximum of 16)\n\
@@ -532,6 +539,7 @@ int main( int argc, char *argv[] ) {
 	int					sleeptime = minsleep;
 	int					sw_uid = 0, sw_gid = 0;
 	time_t				starttime = 0;
+	int mintimestamp = 0;
 	int error, all_server_error;
 
 	struct passwd		*pw;
@@ -542,7 +550,7 @@ int main( int argc, char *argv[] ) {
 
 
 	/* Parse the command line switches and arguments */
-	while ( (param = getopt(argc, argv, "046abdhi:lm:p:qstu:xDM:P:") ) != -1)
+	while ( (param = getopt(argc, argv, "046abdhi:lm:p:qstu:xDM:P:T:") ) != -1)
 	switch( param ) {
 
 		case '0':			/* HTTP/1.0 */
@@ -636,6 +644,12 @@ int main( int argc, char *argv[] ) {
 			proxyport = DEFAULT_PROXY_PORT;
 			splithostport( &proxy, &proxyport );
 			break;
+		case 'T':
+			if ( ( mintimestamp = atoi(optarg) ) <= 0 ) {
+				fputs( "Invalid min timestamp\n", stderr );
+				exit(1);
+			}
+			break;
 		case '?':
 			return 1;
 		default:
@@ -727,7 +741,7 @@ int main( int argc, char *argv[] ) {
 				if ( debug ) printlog( 0, "burst: %d try: %d when: %d", \
 					burst + 1, MAX_ATTEMPT - try + 1, when );
 				timestamp = getHTTPdate( host, port, proxy, proxyport,\
-						httpversion, ipversion, when, &error );
+						httpversion, ipversion, when, mintimestamp, &error );
 				try--;
 			} while ( timestamp && try );
 
