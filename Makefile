@@ -2,7 +2,7 @@ prefix = $(DESTDIR)/usr
 bindir = ${prefix}/bin
 mandir = ${prefix}/share/man
 
-CC = gcc
+CC ?= gcc
 CFLAGS += -Wall -O2
 #CFLAGS += -Wall -pedantic -ansi -O2
 

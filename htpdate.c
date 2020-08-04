@@ -1,8 +1,13 @@
 /*
 	htpdate v1.0.5
 
+	Original author:
 	Eddy Vervest <eddy@vervest.org>
 	http://www.vervest.org/htp
+
+	Actual maintainer:
+	Hong Shen <sh.iridium77@gmail.com>
+	https://github.com/iridium77
 
 	Synchronize local workstation with time offered by remote web servers
 
@@ -345,8 +350,8 @@ static int setclock( double timedelta, int setmode ) {
 		return(0);
 
 	case 1:						/* Adjust time smoothly */
-		timeofday.tv_sec  = (long)timedelta;	
-		timeofday.tv_usec = (long)((timedelta - timeofday.tv_sec) * 1000000);	
+		timeofday.tv_sec  = (long)timedelta;
+		timeofday.tv_usec = (long)((timedelta - timeofday.tv_sec) * 1000000);
 
 		printlog( 0, "Adjusting %.3f seconds", timedelta );
 
@@ -364,8 +369,8 @@ static int setclock( double timedelta, int setmode ) {
 		gettimeofday( &timeofday, NULL );
 		timedelta += ( timeofday.tv_sec + timeofday.tv_usec*1e-6 );
 
-		timeofday.tv_sec  = (long)timedelta;	
-		timeofday.tv_usec = (long)(timedelta - timeofday.tv_sec) * 1000000;	
+		timeofday.tv_sec  = (long)timedelta;
+		timeofday.tv_usec = (long)(timedelta - timeofday.tv_sec) * 1000000;
 
 		printlog( 0, "Set: %s", asctime(localtime(&timeofday.tv_sec)) );
 
